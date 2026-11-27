@@ -2,7 +2,6 @@ package auth
 
 import (
 	"context"
-	"database/sql"
 	"errors"
 	"fmt"
 	"time"
@@ -17,25 +16,6 @@ var (
 	ErrNotFound = errors.New("auth client not found")
 	ErrConflict = errors.New("auth client already exists")
 )
-
-type Client struct {
-	ID           uuid.UUID
-	Username     string
-	APIKeyHash   string
-	PasswordHash string
-	Roles        []string
-}
-
-type clientModel struct {
-	bun.BaseModel `bun:"table:auth_clients,alias:auth_client"`
-
-	ID           uuid.UUID `bun:"id,pk,type:uuid,default:gen_random_uuid()"`
-	Username     string    `bun:"username,type:varchar(64),notnull,unique"`
-	APIKeyHash   string    `bun:"api_key_hash,type:char(64),notnull,unique"`
-	PasswordHash string    `bun:"password_hash,notnull"`
-	Roles        []string  `bun:"roles,type:jsonb,notnull"`
-	CreatedAt    time.Time `bun:"created_at,notnull,nullzero,default:current_timestamp"`
-}
 
 type Store struct {
 	db *bun.DB
@@ -85,44 +65,28 @@ func (s *Store) ByUsername(ctx context.Context, username string) (*Client, error
 	var model clientModel
 	err := s.db.NewSelect().
 		Model(&model).
-		Column("username", "api_key_hash", "password_hash", "roles").
+		Column("id", "username", "api_key_hash", "password_hash", "roles").
 		Where("username = ?", username).
 		Scan(ctx)
-	return clientFromModel(model, err, "username")
+	return model.toClient(), err
 }
 
 func (s *Store) ByAPIKeyHash(ctx context.Context, apiKeyHash string) (*Client, error) {
 	var model clientModel
 	err := s.db.NewSelect().
 		Model(&model).
-		Column("username", "roles").
+		Column("id", "username", "roles").
 		Where("api_key_hash = ?", apiKeyHash).
 		Scan(ctx)
-	return clientFromModel(model, err, "API key")
-}
-
-func clientFromModel(model clientModel, err error, lookup string) (*Client, error) {
-	if errors.Is(err, sql.ErrNoRows) {
-		return &Client{}, ErrNotFound
-	}
-	if err != nil {
-		return &Client{}, fmt.Errorf("query auth client by %s: %w", lookup, err)
-	}
-	return &Client{
-		ID:           model.ID,
-		Username:     model.Username,
-		APIKeyHash:   model.APIKeyHash,
-		PasswordHash: model.PasswordHash,
-		Roles:        model.Roles,
-	}, nil
+	return model.toClient(), err
 }
 
 func (s *Store) GetByID(ctx context.Context, id uuid.UUID) (*Client, error) {
 	var model clientModel
 	err := s.db.NewSelect().
 		Model(&model).
-		Column("username", "api_key_hash", "password_hash", "roles").
+		Column("id", "username", "api_key_hash", "password_hash", "roles").
 		Where("id = ?", id).
 		Scan(ctx)
-	return clientFromModel(model, err, "id")
+	return model.toClient(), err
 }

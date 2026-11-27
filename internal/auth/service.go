@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"log"
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
@@ -16,9 +17,15 @@ import (
 	"github.com/profause/kupapay/pkg/config"
 	"github.com/profause/kupapay/pkg/logger"
 	"go.uber.org/fx"
+	"golang.org/x/crypto/bcrypt"
 )
 
 const jwtIssuer = "kupapay"
+
+var (
+	ErrClientNotFound      = errors.New("client not found")
+	ErrCouldNotCreateToken = errors.New("could not create access token")
+)
 
 type Service interface {
 	AuthenticateBearer(ctx context.Context, token string) (*authctx.Principal, error)
@@ -27,6 +34,7 @@ type Service interface {
 	ByAPIKeyHash(context.Context, string) (*Client, error)
 	Create(context.Context, Client) error
 	IssueToken(client *Client) (string, time.Time, error)
+	CreateToken(ctx context.Context, request CredentialsRequest) (*TokenResponse, error)
 }
 
 var _ Service = (*service)(nil)
@@ -37,16 +45,6 @@ type service struct {
 	tokenTTL  time.Duration
 	logger    *logger.Logger
 	now       func() time.Time
-}
-
-type tokenClaims struct {
-	Roles []string `json:"roles"`
-	jwt.RegisteredClaims
-}
-
-type Principal struct {
-	Username string   `json:"username"`
-	Roles    []string `json:"roles"`
 }
 
 type ServiceParams struct {
@@ -118,6 +116,7 @@ func (s *service) IssueToken(client *Client) (string, time.Time, error) {
 	now := time.Now().UTC()
 	expiresAt := now.Add(s.tokenTTL)
 	claims := tokenClaims{
+		ID:    client.ID,
 		Roles: client.Roles,
 		RegisteredClaims: jwt.RegisteredClaims{
 			Issuer:    jwtIssuer,
@@ -171,4 +170,33 @@ func (s *service) ByAPIKeyHash(ctx context.Context, apiKey string) (*Client, err
 
 func (s *service) Create(ctx context.Context, client Client) error {
 	return s.store.Create(ctx, client)
+}
+
+func (s *service) CreateToken(ctx context.Context, request CredentialsRequest) (*TokenResponse, error) {
+	client, err := s.ByUsername(ctx, request.Username)
+	if err != nil {
+		if errors.Is(err, ErrNotFound) {
+			return nil, ErrClientNotFound
+		}
+		s.logger.Errorf("auth token: load client: %v", err)
+		return nil, ErrInvalidCredentials
+	}
+	if client == nil {
+		return nil, ErrInvalidCredentials
+	}
+	if err := bcrypt.CompareHashAndPassword([]byte(client.PasswordHash), []byte(request.Password)); err != nil {
+		return nil, ErrInvalidCredentials
+	}
+
+	token, expiresAt, err := s.IssueToken(client)
+	if err != nil {
+		log.Printf("auth token: issue JWT: %v", err)
+		return nil, ErrCouldNotCreateToken
+	}
+
+	return &TokenResponse{
+		AccessToken: token,
+		TokenType:   "Bearer",
+		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
+	}, err
 }

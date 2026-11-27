@@ -180,32 +180,16 @@ func (h *Handler) CreateToken(c fiber.Ctx) error {
 	if !validUsername(username) || request.Password == "" || len(request.Password) > 72 {
 		return respondError(c, http.StatusUnauthorized, "invalid username or password")
 	}
-	client, err := h.service.ByUsername(c.Context(), username)
+
+	response, err := h.service.CreateToken(c.Context(), request)
+
 	if err != nil {
-		if errors.Is(err, ErrNotFound) {
-			return respondError(c, http.StatusUnauthorized, "invalid username or password")
-		}
-		log.Printf("auth token: load client: %v", err)
-		return respondError(c, http.StatusInternalServerError, "could not authenticate client")
-	}
-	if client == nil {
-		return respondError(c, http.StatusUnauthorized, "invalid username or password")
-	}
-	if err := bcrypt.CompareHashAndPassword([]byte(client.PasswordHash), []byte(request.Password)); err != nil {
-		return respondError(c, http.StatusUnauthorized, "invalid username or password")
+		return h.handleServiceError(c, err)
 	}
 
-	token, expiresAt, err := h.service.IssueToken(client)
-	if err != nil {
-		log.Printf("auth token: issue JWT: %v", err)
-		return respondError(c, http.StatusInternalServerError, "could not create access token")
-	}
-
-	return apiresponse.Success(c, http.StatusOK, TokenResponse{
-		AccessToken: token,
-		TokenType:   "Bearer",
-		ExpiresIn:   int64(time.Until(expiresAt).Seconds()),
-	}, "Access token created")
+	return apiresponse.Success(c, http.StatusOK,
+		response,
+		"Access token created")
 }
 
 func normalizeUsername(username string) string {
@@ -226,4 +210,21 @@ func validUsername(username string) bool {
 
 func respondError(c fiber.Ctx, status int, message string) error {
 	return apiresponse.Failure(c, status, message)
+}
+
+func (h *Handler) handleServiceError(c fiber.Ctx, err error) error {
+	switch {
+	case errors.Is(err, ErrClientNotFound):
+		h.logger.Warnw(err.Error(), "error", err)
+		return apiresponse.Failure(c, fiber.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrCouldNotCreateToken):
+		h.logger.Warnw(err.Error(), "error", err)
+		return apiresponse.Failure(c, fiber.StatusBadRequest, err.Error())
+	case errors.Is(err, ErrInvalidCredentials):
+		h.logger.Warnw(err.Error(), "error", err)
+		return apiresponse.Failure(c, fiber.StatusBadRequest, err.Error())
+	default:
+		h.logger.Warnw("customer request failed", "error", err)
+		return apiresponse.Failure(c, fiber.StatusInternalServerError, "Failed to process customer request")
+	}
 }

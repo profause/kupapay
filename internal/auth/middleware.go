@@ -13,8 +13,8 @@ import (
 
 type principalKey struct{}
 
-var errInvalidCredentials = errors.New("invalid credentials")
-var errAmbiguousCredentials = errors.New("provide either an API key or a JWT, not both")
+var ErrInvalidCredentials = errors.New("invalid credentials")
+var ErrAmbiguousCredentials = errors.New("provide either an API key or a JWT, not both")
 
 func (m *Middleware) RequireRoles(roles ...string) fiber.Handler {
 	if len(roles) == 0 {
