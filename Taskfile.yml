@@ -1,0 +1,427 @@
+version: '3'
+
+dotenv: ['.env']
+
+vars:
+  APP_NAME: kupapay
+  MAIN_PATH: ./cmd/api
+  BUILD_DIR: ./bin
+  MIGRATION_DIR: ./migrations
+  DATABASE_URL: "postgresql://{{.DATABASE_USER}}:{{.DATABASE_PASSWORD}}@{{.DATABASE_WRITE_HOST}}:{{.DATABASE_PORT}}/{{.DATABASE_NAME}}?sslmode={{.DATABASE_SSLMODE}}"
+  DATABASE_USER: '{{.DATABASE_USER | default "postgres"}}'
+  DATABASE_PASSWORD: '{{.DATABASE_PASSWORD | default "postgres"}}'
+  DATABASE_WRITE_HOST: '{{.DATABASE_WRITE_HOST | default "localhost"}}'
+  DATABASE_PORT: '{{.DATABASE_PORT | default "5432"}}'
+  DATABASE_NAME: '{{.DATABASE_NAME | default "kupapay"}}'
+  DATABASE_SSLMODE: '{{.DATABASE_SSLMODE | default "disable"}}'
+
+env:
+  GO_ENV: '{{.GO_ENV | default "development"}}'
+  AIR: air
+  AIR_DIR: .air
+tasks:
+  default:
+    desc: List all available tasks
+    cmds:
+      - task --list
+
+  # Development tasks
+  dev:
+    desc: Run the application in development mode with hot reload
+    deps:
+      - run:api
+      - run:worker
+      - run:scheduler
+
+  run:api:
+    desc: "Run the API service in development mode"
+    cmds:
+      - "{{.AIR}} -c {{.AIR_DIR}}/api.toml"
+  run:worker:
+    desc: "Run the worker in development mode"
+    cmds:
+      - "{{.AIR}} -c {{.AIR_DIR}}/worker.toml"
+
+  run:scheduler:
+    desc: "Run the scheduler in development mode"
+    cmds:
+      - "{{.AIR}} -c {{.AIR_DIR}}/scheduler.toml"
+
+  run:
+    desc: Run the application
+    deps:
+      - run:api
+
+  # Build tasks
+  build:
+    desc: Build the application
+    cmds:
+      - mkdir -p {{.BUILD_DIR}}
+      - go build -o {{.BUILD_DIR}}/api {{.MAIN_PATH}}/main.go
+    sources:
+      - '**/*.go'
+      - go.mod
+      - go.sum
+    generates:
+      - '{{.BUILD_DIR}}/{{.APP_NAME}}'
+
+  build:linux:
+    desc: Build for Linux
+    cmds:
+      - GOOS=linux GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.APP_NAME}}-linux {{.MAIN_PATH}}/main.go
+
+  build:windows:
+    desc: Build for Windows
+    cmds:
+      - GOOS=windows GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.APP_NAME}}.exe {{.MAIN_PATH}}/main.go
+
+  build:mac:
+    desc: Build for macOS
+    cmds:
+      - GOOS=darwin GOARCH=amd64 go build -o {{.BUILD_DIR}}/{{.APP_NAME}}-mac {{.MAIN_PATH}}/main.go
+
+  # Testing tasks
+  test:
+    desc: Run all tests
+    cmds:
+      - go test ./...
+
+  test:coverage:
+    desc: Run tests with coverage
+    cmds:
+      - go test -v -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+
+  test:unit:
+    desc: Run unit tests only
+    cmds:
+      - go test -v -short ./...
+
+  test:integration:
+    desc: Run integration tests
+    cmds:
+      - go test -v -run Integration ./...
+
+  generate:
+    desc: Generate mocks and swagger documentation
+    cmds:
+      - task generate:mocks
+      - task swagger
+
+  generate:mocks:
+    desc: Generate all gomock mocks declared in Go packages
+    cmds:
+      - go generate -run mockgen ./...
+
+  swagger:
+    desc: Generate swagger documentation
+    cmds:
+      # --parseDependency: docs reference types in pkg/ (outside internal/), e.g.
+      # pagination.CursorPage[...] generics and the nexus.* response types, which
+      # swag only resolves when it parses imported dependency packages.
+      # --useStructName: keep short model names (APIKeyResponse) instead of the
+      # full-import-path names (github_com_bitnob_..._apikey.APIKeyResponse) that
+      # --parseDependency produces by default.
+      - go run github.com/swaggo/swag/cmd/swag@v1.16.6 init -g cmd/api/main.go -o docs --parseInternal --parseDependency --useStructName
+
+  generate:dashboards:
+    desc: Generate provisioned Grafana dashboards from Go definitions
+    cmds:
+      - go run ./cmd/generate-dashboards
+
+  # Code quality tasks
+  lint:
+    desc: Run linter
+    cmds:
+      - golangci-lint run ./...
+
+  lint:fix:
+    desc: Run linter and fix issues
+    cmds:
+      - golangci-lint run --fix ./...
+
+  fmt:
+    desc: Format code
+    cmds:
+      - go fmt ./...
+      - goimports -w .
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  # Dependency management
+  deps:
+    desc: Download dependencies
+    cmds:
+      - go mod download
+
+  deps:tidy:
+    desc: Tidy dependencies
+    cmds:
+      - go mod tidy
+
+  deps:verify:
+    desc: Verify dependencies
+    cmds:
+      - go mod verify
+
+  deps:update:
+    desc: Update all dependencies
+    cmds:
+      - go get -u ./...
+      - go mod tidy
+
+  # Private module access (one-time, per machine)
+  setup:private-modules:
+    desc: Configure Go and Git to fetch private github.com/bitnob modules over SSH
+    cmds:
+      - go env -w GOPRIVATE='github.com/bitnob/*'
+      - git config --global url."git@github.com:bitnob/".insteadOf "https://github.com/bitnob/"
+      - echo "✓ GOPRIVATE set and github.com/bitnob/* rewritten to SSH (requires a GitHub SSH key)"
+
+  # Tool installation
+  tools:install:
+    desc: Install all required Go development tools
+    cmds:
+      - echo "Installing Go development tools..."
+      - go install github.com/golangci/golangci-lint/cmd/golangci-lint@latest
+      - go install golang.org/x/tools/cmd/goimports@latest
+      - go install github.com/air-verse/air@latest
+      - go install github.com/pressly/goose/v3/cmd/goose@latest
+      - go install github.com/swaggo/swag/cmd/swag@v1.16.6
+      - go install go.uber.org/mock/mockgen@v0.6.0
+      - echo "✓ All tools installed successfully"
+
+  tools:check:
+    desc: Check if required tools are installed
+    cmds:
+      - |
+        echo "Checking tools..."
+        command -v golangci-lint >/dev/null 2>&1 && echo "✓ golangci-lint" || echo "✗ golangci-lint (run: task tools:install)"
+        command -v goimports >/dev/null 2>&1 && echo "✓ goimports" || echo "✗ goimports (run: task tools:install)"
+        command -v air >/dev/null 2>&1 && echo "✓ air" || echo "✗ air (run: task tools:install)"
+        command -v goose >/dev/null 2>&1 && echo "✓ goose" || echo "✗ goose (run: task tools:install)"
+        command -v mockgen >/dev/null 2>&1 && echo "✓ mockgen" || echo "✗ mockgen (run: task tools:install)"
+        command -v swag >/dev/null 2>&1 && echo "✓ swag" || echo "✗ swag (run: task tools:install)"
+
+  # Docker tasks - Production
+  docker:build:
+    desc: Build Docker image
+    cmds:
+      - docker build -f docker/Dockerfile -t {{.APP_NAME}}:latest .
+
+  docker:run:
+    desc: Run Docker container
+    cmds:
+      - docker run -p 3000:3000 --env-file .env {{.APP_NAME}}:latest
+
+  docker:up:
+    desc: Start all services with docker-compose (production)
+    cmds:
+      - docker-compose -f docker/docker-compose.yml up -d
+
+  docker:down:
+    desc: Stop all services
+    cmds:
+      - docker-compose -f docker/docker-compose.yml down
+
+  docker:logs:
+    desc: View logs from docker-compose services
+    cmds:
+      - docker-compose -f docker/docker-compose.yml logs -f
+
+  docker:restart:
+    desc: Restart all services
+    cmds:
+      - docker-compose -f docker/docker-compose.yml restart
+
+  # Docker tasks - Development (with Hot Reload)
+  docker:dev:
+    desc: Start development environment with hot reload
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml up -d
+      - ctop
+
+  docker:dev:build:
+    desc: Build development Docker image
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml build
+
+  docker:dev:down:
+    desc: Stop development environment
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml down
+
+  docker:dev:logs:
+    desc: View logs from development environment
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml logs -f app
+
+  docker:dev:logs:all:
+    desc: View logs from all development services
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml logs -f
+
+  docker:dev:restart:
+    desc: Restart development app service
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml restart app
+
+  docker:dev:shell:
+    desc: Open shell in development app container
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml exec app sh
+
+  docker:dev:clean:
+    desc: Clean development environment (remove volumes)
+    cmds:
+      - docker-compose -f docker/docker-compose.dev.yml down -v
+
+  # LGTM Stack tasks
+  observability:up:
+    desc: Start LGTM observability stack
+    cmds:
+      - docker-compose -f docker/docker-compose.observability.yml up -d
+
+  observability:down:
+    desc: Stop LGTM observability stack
+    cmds:
+      - docker-compose -f docker/docker-compose.observability.yml down
+
+  observability:logs:
+    desc: View logs from observability stack
+    cmds:
+      - docker-compose -f docker/docker-compose.observability.yml logs -f
+
+  observability:restart:
+    desc: Restart observability stack
+    cmds:
+      - docker-compose -f docker/docker-compose.observability.yml restart
+
+  # Alert management tasks
+  alerts:status:
+    desc: Show active alerts from Prometheus
+    cmds:
+      - curl -s http://localhost:9090/api/v1/alerts | python3 -m json.tool || echo "⚠ Prometheus not running"
+
+  alerts:list:
+    desc: List all defined alert rules
+    cmds:
+      - curl -s http://localhost:9090/api/v1/rules | python3 -m json.tool || echo "⚠ Prometheus not running"
+
+  alerts:manager:
+    desc: Open Alertmanager UI
+    cmds:
+      - echo "Opening Alertmanager at http://localhost:9093"
+      - open http://localhost:9093 || xdg-open http://localhost:9093 || echo "Open http://localhost:9093 in your browser"
+
+
+
+  # Database migration tasks (goose)
+  migrate:up:
+    desc: Run all pending migrations
+    silent: true
+    cmds:
+      # -allow-missing applies out-of-order migrations (e.g. a branch merge that
+      # introduces a file with an older timestamp than already-applied ones).
+      - goose -dir {{.MIGRATION_DIR}} -allow-missing postgres "{{.DATABASE_URL}}" up
+
+  migrate:down:
+    desc: Roll back the last migration
+    silent: true
+    cmds:
+      - goose -dir {{.MIGRATION_DIR}} postgres "{{.DATABASE_URL}}" down
+
+  migrate:status:
+    desc: Show migration status
+    silent: true
+    cmds:
+      - goose -dir {{.MIGRATION_DIR}} postgres "{{.DATABASE_URL}}" status
+
+  migrate:create:
+    desc: "Create a new migration file (usage: task migrate:create -- <name>)"
+    silent: true
+    cmds:
+      - goose -dir {{.MIGRATION_DIR}} create {{.CLI_ARGS}} sql
+
+  migrate:reset:
+    desc: Roll back all migrations
+    silent: true
+    cmds:
+      - goose -dir {{.MIGRATION_DIR}} postgres "{{.DATABASE_URL}}" reset
+
+  migrate:redo:
+    desc: Roll back the last migration then re-apply it
+    silent: true
+    cmds:
+      - goose -dir {{.MIGRATION_DIR}} postgres "{{.DATABASE_URL}}" redo
+
+  # Local dependencies tasks (for running air locally without docker-compose)
+  local:deps:start:
+    desc: Start all local dependencies (Redis, Postgres)
+    cmds:
+      - task local:redis:start
+      - task local:postgres:start
+      - echo "✓ All local dependencies started"
+
+  local:deps:stop:
+    desc: Stop all local dependencies
+    cmds:
+      - docker stop redis postgres 2>/dev/null || true
+      - echo "✓ All local dependencies stopped"
+
+  local:deps:clean:
+    desc: Stop and remove all local dependency containers
+    cmds:
+      - docker stop redis postgres 2>/dev/null || true
+      - docker rm redis postgres 2>/dev/null || true
+      - echo "✓ All local dependencies cleaned"
+
+  local:redis:start:
+    desc: Start Redis container for local development
+    cmds:
+      - docker run -d --name redis -p 6379:6379 redis:7.4.0
+      - echo "✓ Redis started on port 6379"
+
+  local:redis:stop:
+    desc: Stop Redis container
+    cmds:
+      - docker stop redis 2>/dev/null || true
+      - docker rm redis 2>/dev/null || true
+
+  local:postgres:start:
+    desc: Start Postgres container for local development
+    cmds:
+      - docker run -d --name postgres -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres
+      - echo "✓ Postgres started on port 5432"
+
+  local:postgres:stop:
+    desc: Stop Postgres container
+    cmds:
+      - docker stop postgres 2>/dev/null || true
+      - docker rm postgres 2>/dev/null || true
+
+  # Clean tasks
+  clean:
+    desc: Clean build artifacts
+    cmds:
+      - rm -rf {{.BUILD_DIR}}
+      - rm -f coverage.out coverage.html
+
+  clean:all:
+    desc: Clean everything including dependencies
+    cmds:
+      - task clean
+      - go clean -modcache
+
+
+
+  # Help and information
+  info:
+    desc: Display project information
+    cmds:
+      - echo "App Name - {{.APP_NAME}}"
+      - echo "Go Version - $(go version)"
+      - echo "Environment - {{.GO_ENV}}"

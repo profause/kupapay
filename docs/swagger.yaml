@@ -1,10 +1,140 @@
 basePath: /
+definitions:
+  apiresponse.FailureDoc:
+    properties:
+      code:
+        type: string
+      data: {}
+      message:
+        type: string
+      status:
+        type: boolean
+    type: object
+  apiresponse.SuccessDoc:
+    properties:
+      data: {}
+      message:
+        type: string
+      status:
+        type: boolean
+    type: object
+  auth.CredentialsRequest:
+    properties:
+      password:
+        example: correct horse battery staple
+        type: string
+      username:
+        example: client-01
+        type: string
+    type: object
+  auth.SignUpResponse:
+    properties:
+      api_key:
+        type: string
+      roles:
+        items:
+          type: string
+        type: array
+      username:
+        type: string
+    type: object
+  auth.TokenResponse:
+    properties:
+      access_token:
+        type: string
+      expires_in:
+        example: 3600
+        type: integer
+      token_type:
+        example: Bearer
+        type: string
+    type: object
 info:
   contact: {}
-  description: API documentation for KupaPay.
+  description: API documentation for KupaPay. Protected /api/v1 routes accept an API
+    key or a Bearer JWT; sign-up and token issuance are public.
   title: KupaPay API
   version: "1.0"
 paths:
+  /api/v1/auth/signup:
+    post:
+      consumes:
+      - application/json
+      description: Creates an account, returning a generated API key once. The API
+        key is stored as a hash.
+      parameters:
+      - description: Client credentials
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/auth.CredentialsRequest'
+      produces:
+      - application/json
+      responses:
+        "201":
+          description: Created
+          schema:
+            allOf:
+            - $ref: '#/definitions/apiresponse.SuccessDoc'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.SignUpResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+        "409":
+          description: Conflict
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+      summary: Register a client
+      tags:
+      - auth
+  /api/v1/auth/token:
+    post:
+      consumes:
+      - application/json
+      description: Exchanges a registered username and password for a signed JWT.
+      parameters:
+      - description: Client credentials
+        in: body
+        name: credentials
+        required: true
+        schema:
+          $ref: '#/definitions/auth.CredentialsRequest'
+      produces:
+      - application/json
+      responses:
+        "200":
+          description: OK
+          schema:
+            allOf:
+            - $ref: '#/definitions/apiresponse.SuccessDoc'
+            - properties:
+                data:
+                  $ref: '#/definitions/auth.TokenResponse'
+              type: object
+        "400":
+          description: Bad Request
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+        "401":
+          description: Unauthorized
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
+      summary: Create a JWT
+      tags:
+      - auth
   /health:
     get:
       description: Returns the current health status of the API.
@@ -14,10 +144,29 @@ paths:
         "200":
           description: API is healthy
           schema:
-            additionalProperties:
-              type: string
-            type: object
+            allOf:
+            - $ref: '#/definitions/apiresponse.SuccessDoc'
+            - properties:
+                data:
+                  additionalProperties:
+                    type: string
+                  type: object
+              type: object
+        "500":
+          description: Internal Server Error
+          schema:
+            $ref: '#/definitions/apiresponse.FailureDoc'
       summary: Check API health
       tags:
       - health
+securityDefinitions:
+  ApiKeyAuth:
+    in: header
+    name: X-API-Key
+    type: apiKey
+  BearerAuth:
+    description: Use the value "Bearer <token>".
+    in: header
+    name: Authorization
+    type: apiKey
 swagger: "2.0"
